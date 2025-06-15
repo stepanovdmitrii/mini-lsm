@@ -1,7 +1,7 @@
 #![allow(unused_variables)] // TODO(you): remove this lint after implementing this mod
 #![allow(dead_code)] // TODO(you): remove this lint after implementing this mod
 
-use std::cmp::{self};
+use std::cmp::{self, Ordering};
 use std::collections::BinaryHeap;
 
 use anyhow::Result;
@@ -45,7 +45,17 @@ pub struct MergeIterator<I: StorageIterator> {
 
 impl<I: StorageIterator> MergeIterator<I> {
     pub fn create(iters: Vec<Box<I>>) -> Self {
-        unimplemented!()
+        let mut heap = BinaryHeap::new();
+        for (idx, iter) in iters.into_iter().enumerate() {
+            if iter.is_valid() {
+                heap.push(HeapWrapper(idx, iter));
+            }
+        }
+        let current = heap.pop();
+        Self {
+            iters: heap,
+            current: current,
+        }
     }
 }
 
@@ -55,18 +65,46 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
     type KeyType<'a> = KeySlice<'a>;
 
     fn key(&self) -> KeySlice {
-        unimplemented!()
+        match &self.current {
+            Some(i) => i.1.key(),
+            None => KeySlice::from_slice(b""),
+        }
     }
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        match &self.current {
+            Some(i) => i.1.value(),
+            None => b"",
+        }
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.current.is_some()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        let mut current = self.current.take().unwrap();
+        while self.iters.peek().is_some()
+            && self.iters.peek().unwrap().1.key().cmp(&current.1.key()) == Ordering::Equal
+        {
+            let mut it = self.iters.pop().take().unwrap();
+            match it.1.next() {
+                Ok(_) => {
+                    if it.1.is_valid() {
+                        self.iters.push(it);
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        match current.1.next() {
+            Ok(_) => {}
+            Err(e) => return Err(e),
+        }
+        if current.1.is_valid() {
+            self.iters.push(current);
+        }
+        self.current = self.iters.pop();
+        Ok(())
     }
 }

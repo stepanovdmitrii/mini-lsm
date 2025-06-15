@@ -5,9 +5,10 @@ use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Ok, Result};
 use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
+use nom::AsBytes;
 use ouroboros::self_referencing;
 
 use crate::iterators::StorageIterator;
@@ -106,7 +107,22 @@ impl MemTable {
 
     /// Get an iterator over a range of keys.
     pub fn scan(&self, _lower: Bound<&[u8]>, _upper: Bound<&[u8]>) -> MemTableIterator {
-        unimplemented!()
+        let mut result = MemTableIterator::new(
+            self.map.clone(),
+            |m| {
+                m.range((
+                    _lower.map(|b| Bytes::copy_from_slice(b)),
+                    _upper.map(|b| Bytes::copy_from_slice(b)),
+                ))
+            },
+            (Bytes::new(), Bytes::new()),
+        );
+        let item = match result.with_iter_mut(|r| r.next()) {
+            Some(e) => (e.key().clone(), e.value().clone()),
+            None => (Bytes::new(), Bytes::new()),
+        };
+        result.with_item_mut(|i| *i = item);
+        result
     }
 
     /// Flush the mem-table to SSTable. Implement in week 1 day 6.
@@ -152,18 +168,29 @@ impl StorageIterator for MemTableIterator {
     type KeyType<'a> = KeySlice<'a>;
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        self.borrow_item().1.as_bytes()
     }
 
     fn key(&self) -> KeySlice {
-        unimplemented!()
+        KeySlice::from_slice(self.borrow_item().0.as_bytes())
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.with(|s| !s.item.0.is_empty())
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        self.with_mut(|s| match s.iter.next() {
+            Some(i) => {
+                s.item.0 = Bytes::copy_from_slice(i.key());
+                s.item.1 = Bytes::copy_from_slice(i.value());
+                Ok(())
+            }
+            None => {
+                s.item.0 = Bytes::new();
+                s.item.1 = Bytes::new();
+                Ok(())
+            }
+        })
     }
 }
